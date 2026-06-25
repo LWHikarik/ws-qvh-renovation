@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	log "github.com/sirupsen/logrus"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -30,7 +31,6 @@ func main() {
 }
 
 func startWebSocketServer(addr string) {
-	log.Println("Starting WebSocket server")
 	stopSignal := make(chan interface{})
 	stopHub := make(chan interface{})
 	shutdown := make(chan interface{})
@@ -44,10 +44,21 @@ func startWebSocketServer(addr string) {
 	m.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		serveWs(hub, w, r)
 	})
+
+	// Bind the port BEFORE logging "Starting…": ws-scrcpy's QvhackRunner treats the
+	// first stderr line as "ready" and immediately dials this port, so the listener
+	// must already be accepting or the proxy hits connect-ECONNREFUSED (the old qvh
+	// build hid this race behind its slow CGO/libusb startup).
+	ln, lerr := net.Listen("tcp", addr)
+	if lerr != nil {
+		log.Fatalf("listen %s: %v", addr, lerr)
+	}
+	log.Println("Starting WebSocket server")
+
 	go func() {
-		err := s.ListenAndServe()
+		err := s.Serve(ln)
 		if err != nil {
-			log.Info("s.ListenAndServe(): ", err)
+			log.Info("s.Serve(): ", err)
 		}
 		stopHub <- nil
 		<-stopHub
@@ -99,13 +110,21 @@ func activate(udid string) []byte {
 }
 
 func formatUdid(udid string) (string, error) {
-	if len(udid) == 40 {
+	// ws-scrcpy's native device-lib reports the udid in a fixed 40-byte buffer, NUL-padded
+	// when the device uses a short (24-hex) identifier — so we get "<24 hex>" + 16x \x00.
+	// Those embedded NULs make exec of the ios child fail with EINVAL ("fork/exec: invalid
+	// argument"), so strip them (and stray whitespace) before validating the length.
+	udid = strings.TrimSpace(strings.ReplaceAll(udid, "\x00", ""))
+	switch len(udid) {
+	case 40: // legacy all-hex udid
 		return udid, nil
-	}
-	if len(udid) == 25 {
+	case 25: // new-style with the dash separator (00008110-000C2DA41199401E)
 		return strings.Replace(udid, "-", "", 1), nil
+	case 24: // new-style, dash already stripped or NUL-padding trimmed
+		return udid, nil
+	default:
+		return udid, fmt.Errorf("Invalid udid: %q", udid)
 	}
-	return udid, fmt.Errorf("Invalid udid: %s", udid)
 }
 
 func waitForSigInt(stopSignalChannel chan interface{}) {
