@@ -1,13 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/danielpaulus/quicktime_video_hack/screencapture"
 	log "github.com/sirupsen/logrus"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 )
@@ -65,23 +66,22 @@ func startWebSocketServer(addr string) {
 }
 
 func screenCaptureDevices() []byte {
-	deviceList, err := screencapture.FindIosDevices()
+	out, err := exec.Command(iosBinary(), "list").Output()
 	if err != nil {
-		log.Fatalf("Error finding iOS Devices, error: %s", err)
+		return toErrJSON(err, "Error listing iOS devices via go-ios")
 	}
-
-	result := make([]detailsEntry, len(deviceList))
-	for i, device := range deviceList {
-		udid := strings.Trim(device.SerialNumber, "\x00")
-		if len(udid) == 24 {
-			udid = fmt.Sprintf("%s-%s", udid[0:8], udid[8:])
+	// `ios list` prints {"deviceList":[...]} on stdout; tolerate stray log lines.
+	var listResp struct {
+		DeviceList []string `json:"deviceList"`
+	}
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		if bytes.Contains(line, []byte("deviceList")) && json.Unmarshal(line, &listResp) == nil {
+			break
 		}
-		result[i] = detailsEntry{
-			Udid:           udid,
-			ProductName:    device.ProductName,
-			ProductType:    "",
-			ProductVersion: "",
-		}
+	}
+	result := make([]detailsEntry, 0, len(listResp.DeviceList))
+	for _, udid := range listResp.DeviceList {
+		result = append(result, detailsEntry{Udid: udid})
 	}
 	text, err := json.Marshal(result)
 	if err != nil {
@@ -90,21 +90,11 @@ func screenCaptureDevices() []byte {
 	return text
 }
 
-// This command is for testing if we can enable the hidden Quicktime device config
+// activate is a no-op for DeviceKit: there is no hidden QuickTime config to enable
+// (capture happens on-device). Kept for websocket "activate" command compatibility.
 func activate(udid string) []byte {
-	device, err := screencapture.FindIosDevice(udid)
-	if err != nil {
-		return toErrJSON(err, "no device found to activate")
-	}
-
-	log.Debugf("Enabling device: %v", device)
-	device, err = screencapture.EnableQTConfig(device)
-	if err != nil {
-		return toErrJSON(err, "Error enabling QT config")
-	}
-
 	return toJSON(map[string]interface{}{
-		"device_activated": device.DetailsMap(),
+		"device_activated": map[string]string{"udid": udid},
 	})
 }
 

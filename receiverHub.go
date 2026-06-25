@@ -1,7 +1,6 @@
 package main
 
 import (
-	"github.com/danielpaulus/quicktime_video_hack/screencapture"
 	log "github.com/sirupsen/logrus"
 	"sync"
 	"time"
@@ -102,27 +101,10 @@ func (r *ReceiverHub) DelClient(c *Client) {
 }
 
 func (r *ReceiverHub) stream() {
-	var udid = r.udid
-	device, err := screencapture.FindIosDevice(udid)
-	if err != nil {
-		r.send <- toErrJSON(err, "no device found to activate")
-	}
-
-	log.Debugf("Enabling device: %v", device)
-	device, err = screencapture.EnableQTConfig(device)
-	if err != nil {
-		r.send <- toErrJSON(err, "Error enabling QT config")
-	}
-	r.writer = NewNaluWriter(r)
-	adapter := screencapture.UsbAdapter{}
-	mp := screencapture.NewMessageProcessor(&adapter, r.stopReading, r.writer, false)
-	go func() {
-		err := adapter.StartReading(device, &mp, r.stopReading)
-		if err != nil {
-			log.Error("adapter.StartReading(device, &mp, r.stopReading): ", err)
-		}
-		r.writer.Stop()
-	}()
+	// Video now comes from go-ios DeviceKit (H.264 over HTTP) instead of qvh
+	// (QuickTime-over-USB). Everything downstream (NALU framing, SPS/PPS caching in
+	// run(), client fan-out) is unchanged.
+	startDeviceKitStream(r)
 }
 
 func (r *ReceiverHub) run() {
