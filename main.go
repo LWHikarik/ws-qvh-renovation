@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type detailsEntry struct {
